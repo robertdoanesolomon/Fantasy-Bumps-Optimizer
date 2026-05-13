@@ -90,7 +90,7 @@
     .crew-meta-col {
       display: contents;
     }
-    /* Div 1 top 3: empty slot still takes width so return/📈 line up with OB rows */
+    /* Div 1 boats without OB UI: empty slot still takes width so return/📈 line up with OB rows */
     .crew-ob-slot:empty {
       flex: 0 0 2.3rem;
       width: 2.3rem;
@@ -261,12 +261,7 @@
   <div class="container-fluid" style="max-width: 1320px;">
     <div class="main-panel">
       <p class="text-muted small mb-3 mb-md-2">
-        Choose <strong>Summer Eights</strong> or <strong>Torpids</strong>, set the year (or tick <strong>Latest bumps</strong>),
-        then <strong>Load crews</strong> to pull market data from
-        <a href="https://fantasybumps.org.uk/" target="_blank" rel="noopener">fantasybumps.org.uk</a>.
-        Select boats, use overbump where available, set your crab budgets for men and women, and <strong>Run optimization</strong> for the top 10 combinations per side, with popularity tables alongside.
-        Payouts match the site; prices use live buy buttons when the market is open, or estimated costs after the event ends.
-        <strong>Latest bumps</strong> scans downward from the max year until it finds a live men’s market page for that series—so when the site adds <code>eights2026</code> or <code>torpids2026</code>, the next load picks it automatically (no redeploy), until we pass the configured year range.
+        A tool to help select the optimal combination of people in crews to maximise your Fantasy Bumps return. Load the crews, and click on the crews you think will bump. Add the overbump (or double-overbump!) if you think they will, then click run optimisation! The 10 best combos for men's and women's divisions will then be calculated.
       </p>
 
       <div class="row align-items-center event-controls">
@@ -282,7 +277,7 @@
         </div>
         <div class="col-auto">
           <label class="small mb-0 mr-2">Year</label>
-          <input type="number" id="year" class="form-control form-control-sm d-inline-block" min="2020" max="2035" value="2025" style="width: 5rem;" />
+          <input type="number" id="year" class="form-control form-control-sm d-inline-block" min="2020" max="2100" value="2025" style="width: 5rem;" />
         </div>
         <div class="col-auto">
           <label class="small mb-0"><input type="checkbox" id="useLatest" class="mr-1" />Latest bumps</label>
@@ -339,6 +334,10 @@
     </div>
   </div>
 
+  <footer class="container-fluid text-center text-muted small py-4 mt-2" style="max-width: 1320px;">
+    <p class="mb-0">We thank the creators of <a href="https://fantasybumps.org.uk/" target="_blank" rel="noopener">https://fantasybumps.org.uk/</a> for this idea and for the data.</p>
+  </footer>
+
   <script>
     const state = { men: [], women: [] };
     const el = (id) => document.getElementById(id);
@@ -376,12 +375,15 @@
       return /Division\s*1(?!\d)/i.test(String(c.division || ''));
     }
 
-    function isDivisionOneTopThree(c) {
-      if (c.bumps_position == null || c.bumps_position < 1 || c.bumps_position > 3) return false;
-      return /Division\s*1(?!\d)/i.test(String(c.division || ''));
+    function divisionOneObBlockedRows(c) {
+      if (c.bumps_position == null || c.bumps_position < 1) return false;
+      if (!/Division\s*1(?!\d)/i.test(String(c.division || ''))) return false;
+      const n = el('series').value === 'torpids' ? 2 : 3;
+      return c.bumps_position <= n;
     }
 
     function defaultObSteps(c) {
+      if (el('series').value === 'torpids') return 2;
       if (c.bumps_position === 2) return 2;
       return 3;
     }
@@ -529,7 +531,7 @@
           row.dataset.crewIndex = String(c._idx);
           row.dataset.side = side;
 
-          const obDisabled = isDivisionOneTopThree(c);
+          const obDisabled = divisionOneObBlockedRows(c);
 
           const lab = document.createElement('div');
           lab.className = 'd-flex align-items-center flex-nowrap flex-grow-1 mb-0 crew-pick-main';
@@ -541,7 +543,7 @@
               const stepsInp = row.querySelector('input.ob-steps-input');
               if (obInp) obInp.checked = false;
               if (obWrapVisible) obWrapVisible.classList.remove('is-open');
-              if (stepsInp) stepsInp.value = String(stepsInp.dataset.defaultOb || '3');
+              if (stepsInp) stepsInp.value = String(stepsInp.dataset.defaultOb || (el('series').value === 'torpids' ? '2' : '3'));
               const metaEl = row.querySelector('.crew-meta');
               const idx = +row.dataset.crewIndex;
               const s = row.dataset.side;

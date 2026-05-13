@@ -134,7 +134,7 @@ def fetch_event(series: str, year: int, gender: str) -> tuple[pd.DataFrame, bool
     return parse_market_page(r.text)
 
 
-def latest_year_for_series(series: str, min_y: int = 2020, max_y: int = 2035) -> int | None:
+def latest_year_for_series(series: str, min_y: int = 2020, max_y: int = 2100) -> int | None:
     for y in range(max_y, min_y - 1, -1):
         u = f"{BASE}/{series}{y}/men/"
         try:
