@@ -9,9 +9,6 @@ Load crews, pick boats and overbumps, set crab budgets, then **Run optimization*
 
 ![Fantasy Bumps optimizer — Summer Eights example](docs/screenshot.png)
 
----
-=======
->>>>>>> a5583dbca2794a911218748a87f5cd04912f90ec
 
 ## Get the code from GitHub
 
