@@ -2,6 +2,12 @@
 
 Flask app that loads crew data from [fantasybumps.org.uk](https://fantasybumps.org.uk/) and runs combination search with budgets and overbump-style rules.
 
+## Example (web UI)
+
+Load crews, pick boats and overbumps, set crab budgets, then **Run optimization** to see top combinations and popularity sidebars.
+
+![Fantasy Bumps optimizer — Summer Eights example](docs/screenshot.png)
+
 ---
 
 ## Get the code from GitHub
