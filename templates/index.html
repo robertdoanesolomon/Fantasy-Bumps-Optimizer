@@ -261,9 +261,12 @@
   <div class="container-fluid" style="max-width: 1320px;">
     <div class="main-panel">
       <p class="text-muted small mb-3 mb-md-2">
-        Layout and blade colours match
+        Choose <strong>Summer Eights</strong> or <strong>Torpids</strong>, set the year (or tick <strong>Latest bumps</strong>),
+        then <strong>Load crews</strong> to pull market data from
         <a href="https://fantasybumps.org.uk/" target="_blank" rel="noopener">fantasybumps.org.uk</a>.
-        Payout numbers always match the live site. Prices use buy buttons when the event is open; after it ends, costs are estimated (300→20).
+        Select boats, use overbump where available, set your crab budgets for men and women, and <strong>Run optimization</strong> for the top 10 combinations per side, with popularity tables alongside.
+        Payouts match the site; prices use live buy buttons when the market is open, or estimated costs after the event ends.
+        <strong>Latest bumps</strong> scans downward from the max year until it finds a live men’s market page for that series—so when the site adds <code>eights2026</code> or <code>torpids2026</code>, the next load picks it automatically (no redeploy), until we pass the configured year range.
       </p>
 
       <div class="row align-items-center event-controls">
@@ -282,7 +285,7 @@
           <input type="number" id="year" class="form-control form-control-sm d-inline-block" min="2020" max="2035" value="2025" style="width: 5rem;" />
         </div>
         <div class="col-auto">
-          <label class="small mb-0"><input type="checkbox" id="useLatest" class="mr-1" />Latest year</label>
+          <label class="small mb-0"><input type="checkbox" id="useLatest" class="mr-1" />Latest bumps</label>
         </div>
         <div class="col-auto">
           <label class="small mb-0 mr-1">Crabs M</label>
