@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fantasy Bumps — optimizer</title>
+  <link rel="stylesheet" href="https://fantasybumps.s3.eu-west-2.amazonaws.com/core/bootstrap.min.css" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fantasybumps.s3.eu-west-2.amazonaws.com/fantasy/main.css" />
+  <link rel="stylesheet" href="https://fantasybumps.s3.eu-west-2.amazonaws.com/fantasy/club_styles.css" />
+  <style>
+    body {
+      background: #e9ecef;
+      color: #212529;
+      min-height: 100vh;
+    }
+    .app-navbar {
+      background: #007bff !important;
+    }
+    .app-navbar .navbar-brand { color: #fff !important; font-weight: 600; }
+    .main-panel {
+      background: #fff;
+      border-radius: 0.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    /* Controls: small load, large optimize */
+    #btnLoad {
+      font-size: 0.8rem;
+      padding: 0.25rem 0.6rem;
+    }
+    #btnOpt {
+      font-size: 1.15rem;
+      font-weight: 600;
+      padding: 0.65rem 1.75rem;
+      box-shadow: 0 2px 4px rgba(40, 167, 69, 0.35);
+    }
+    .crew-pick {
+      cursor: default;
+      margin-bottom: 0 !important;
+      gap: 0.45rem;
+      align-items: center !important;
+      min-height: 3.5em;
+      height: auto !important;
+    }
+    .crew-pick-main {
+      cursor: pointer;
+      min-width: 0;
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .crew-row--selected {
+      background-color: #e3f2fd !important;
+    }
+    .crew-row--selected .crew-pick-main:hover { filter: brightness(0.99); }
+    .crew-pick-main:hover { filter: brightness(0.97); }
+    /* main.css sets .avatar { display: table-cell } — wrecks flex; names can collapse to zero width */
+    .crew-pick-main .avatar {
+      display: inline-flex !important;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      flex-shrink: 0;
+    }
+    .crew-pick .crew-name {
+      font-weight: 500;
+      color: #212529;
+      flex: 1 1 auto;
+      min-width: 0;
+      white-space: normal;
+      overflow: visible;
+      word-break: normal;
+      overflow-wrap: break-word;
+    }
+    /* OB on: a little clipping on the name is OK */
+    .crew-pick:has(.ob-crew:checked) .crew-name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .crew-pick .crew-meta {
+      font-size: 0.78rem;
+      color: #6c757d;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    /* Drop fixed-width “columns” — children participate in one flex row with natural widths */
+    .crew-meta-col {
+      display: contents;
+    }
+    /* Div 1 top 3: empty slot still takes width so return/📈 line up with OB rows */
+    .crew-ob-slot:empty {
+      flex: 0 0 2.3rem;
+      width: 2.3rem;
+      min-width: 2.3rem;
+      max-width: 2.3rem;
+      flex-shrink: 0;
+    }
+    .crew-ob-slot:not(:empty) {
+      display: contents;
+    }
+    .crew-pick .ob-tick,
+    .crew-pick .ob-up-wrap {
+      flex-shrink: 0;
+    }
+    .crew-pick .crew-ret {
+      font-weight: 600;
+      color: #212529;
+    }
+    .crew-pick .pop-market {
+      display: inline-block;
+      font-weight: 700;
+      font-size: 0.82rem;
+      color: #0a3622;
+      background: linear-gradient(180deg, #cfe9da 0%, #b8dfcc 100%);
+      padding: 0.08rem 0.4rem;
+      border-radius: 0.2rem;
+      border: 1px solid rgba(10, 54, 34, 0.18);
+      margin-left: 0.1rem;
+    }
+    .ob-tick {
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.2rem;
+      padding: 0 0.15rem;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .ob-tick input { margin: 0; cursor: pointer; }
+    .ob-tick .ob-lbl {
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: #6c757d;
+      letter-spacing: 0.02em;
+    }
+    .ob-up-wrap {
+      display: none;
+      align-items: center;
+      gap: 0.2rem;
+      flex-shrink: 0;
+    }
+    .ob-up-wrap.is-open {
+      display: flex;
+    }
+    .ob-up-wrap .ob-steps-input {
+      width: 2.4rem;
+      padding: 0.12rem 0.15rem;
+      font-size: 0.72rem;
+      line-height: 1.2;
+      text-align: center;
+    }
+    .ob-steps-input[type="number"] {
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
+    .ob-steps-input[type="number"]::-webkit-outer-spin-button,
+    .ob-steps-input[type="number"]::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .ob-up-wrap .ob-steps-hint {
+      font-size: 0.65rem;
+      color: #6c757d;
+      white-space: nowrap;
+    }
+    .col-crews h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      border-bottom: 2px solid #007bff;
+      padding-bottom: 0.35rem;
+      margin-bottom: 0.75rem;
+    }
+    #status { min-height: 1.75rem; font-size: 0.9rem; }
+    #status.err { color: #dc3545; }
+    #status.ok { color: #155724; }
+    .results h2 { font-size: 1.1rem; margin-top: 1.25rem; }
+    .results h2:first-child { margin-top: 0; }
+    .results-panel,
+    .popular-static-panel {
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    .results-panel {
+      position: sticky;
+      top: 0.75rem;
+      align-self: flex-start;
+      margin-bottom: 1rem;
+    }
+    .results-combos-scroll {
+      max-height: min(58vh, 26rem);
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 0.35rem;
+    }
+    .results-combos-scroll::-webkit-scrollbar { width: 8px; }
+    .results-combos-scroll::-webkit-scrollbar-thumb {
+      background: #ced4da;
+      border-radius: 4px;
+    }
+    .results-panel .results-heading,
+    .popular-static-panel .results-heading {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin: 0 0 0.75rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 2px solid #28a745;
+    }
+    .popular-static-panel .popular-division-heading {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 0 0 0.35rem;
+      padding-bottom: 0.2rem;
+      border-bottom: 1px solid #007bff;
+    }
+    .popular-static-panel .popular-table-wrap {
+      margin-bottom: 0.75rem;
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    .combo {
+      margin-bottom: 0.55rem;
+      padding: 0.4rem 0.55rem;
+      border: 1px solid #dee2e6;
+      border-radius: 0.25rem;
+      background: #f8f9fa;
+    }
+    .results-table td.crew-cell {
+      white-space: normal;
+      overflow: visible;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      max-width: none;
+    }
+    .results-table th, .results-table td { vertical-align: middle; line-height: 1.2; }
+    .table-sm th, .table-sm td { padding: 0.2rem 0.35rem; }
+    .results-table .crew-ret {
+      font-weight: 600;
+      color: #212529;
+    }
+    .results-table .pop-market {
+      display: inline-block;
+      font-weight: 700;
+      font-size: 0.8rem;
+      color: #0a3622;
+      background: #d1e7dd;
+      padding: 0.04rem 0.3rem;
+      border-radius: 0.15rem;
+    }
+    .event-controls label { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark app-navbar mb-3">
+    <span class="navbar-brand mb-0">Fantasy Bumps — optimizer</span>
+  </nav>
+
+  <div class="container-fluid" style="max-width: 1320px;">
+    <div class="main-panel">
+      <p class="text-muted small mb-3 mb-md-2">
+        Layout and blade colours match
+        <a href="https://fantasybumps.org.uk/" target="_blank" rel="noopener">fantasybumps.org.uk</a>.
+        Payout numbers always match the live site. Prices use buy buttons when the event is open; after it ends, costs are estimated (300→20).
+      </p>
+
+      <div class="row align-items-center event-controls">
+        <div class="col-auto pr-2">
+          <button type="button" id="btnLoad" class="btn btn-primary btn-sm">Load crews</button>
+        </div>
+        <div class="col-auto">
+          <label class="small mb-0 mr-2">Series</label>
+          <select id="series" class="form-control form-control-sm d-inline-block" style="width: auto;">
+            <option value="eights">Summer Eights</option>
+            <option value="torpids">Torpids</option>
+          </select>
+        </div>
+        <div class="col-auto">
+          <label class="small mb-0 mr-2">Year</label>
+          <input type="number" id="year" class="form-control form-control-sm d-inline-block" min="2020" max="2035" value="2025" style="width: 5rem;" />
+        </div>
+        <div class="col-auto">
+          <label class="small mb-0"><input type="checkbox" id="useLatest" class="mr-1" />Latest year</label>
+        </div>
+        <div class="col-auto">
+          <label class="small mb-0 mr-1">Crabs M</label>
+          <input type="number" id="budgetM" class="form-control form-control-sm d-inline-block" min="0" max="5000" value="1000" style="width: 4.5rem;" />
+        </div>
+        <div class="col-auto">
+          <label class="small mb-0 mr-1">Crabs W</label>
+          <input type="number" id="budgetW" class="form-control form-control-sm d-inline-block" min="0" max="5000" value="1000" style="width: 4.5rem;" />
+        </div>
+        <div class="col text-md-right mt-2 mt-md-0">
+          <button type="button" id="btnOpt" class="btn btn-success btn-lg">Run optimization</button>
+        </div>
+      </div>
+
+      <div id="status" class="mt-3"></div>
+    </div>
+
+    <div class="row align-items-lg-start">
+      <div class="col-lg-7 order-2 order-lg-1">
+        <div class="row">
+          <div class="col-md-6 col-crews mb-4">
+            <h2>Men</h2>
+            <div id="menCrews"><p class="text-muted small">Load crews first.</p></div>
+          </div>
+          <div class="col-md-6 col-crews mb-4">
+            <h2>Women</h2>
+            <div id="womenCrews"><p class="text-muted small">Load crews first.</p></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-5 order-1 order-lg-2 mt-3 mt-lg-0 d-flex flex-column">
+        <aside class="main-panel results-panel mb-3">
+          <h2 class="results-heading">Top combinations</h2>
+          <p id="resultsHint" class="text-muted small mb-2">Run optimization to see results here while you scroll crews.</p>
+          <div id="resultsScroll" class="results-combos-scroll">
+            <div id="results" class="results"></div>
+          </div>
+        </aside>
+        <aside class="main-panel popular-static-panel mb-3">
+          <h2 class="results-heading mb-3">Most popular crews</h2>
+          <h3 class="popular-division-heading">Men</h3>
+          <div id="popularCrewsMen" class="popular-table-wrap text-muted small">
+            <p class="mb-0">Load crews to see top 10 men by 📈.</p>
+          </div>
+          <h3 class="popular-division-heading">Women</h3>
+          <div id="popularCrewsWomen" class="popular-table-wrap text-muted small">
+            <p class="mb-0">Load crews to see top 10 women by 📈.</p>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = { men: [], women: [] };
+    const el = (id) => document.getElementById(id);
+
+    function setResultsHintVisible(show) {
+      const h = el('resultsHint');
+      if (h) h.style.display = show ? '' : 'none';
+    }
+
+    function setStatus(html, cls) {
+      const s = el('status');
+      s.className = cls || '';
+      s.innerHTML = html;
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function displayCrewName(raw) {
+      if (raw == null || raw === '') return '';
+      let n = String(raw);
+      n = n.replace(/st\.?\s*edmund\s*hall/gi, 'Teddy Hall');
+      n = n.replace(/lady\s*margaret\s*hall/gi, 'LMH');
+      n = n.replace(/green[-\s]*templeton(?:\s*college)?/gi, 'GTC');
+      n = n.replace(/st\.?\s*catherine'?s?\s*college/gi, 'St Catz');
+      n = n.replace(/st\.?\s*catherine'?s?/gi, 'St Catz');
+      return n;
+    }
+
+    function isDivisionOneHead(c) {
+      if (c.bumps_position !== 1) return false;
+      return /Division\s*1(?!\d)/i.test(String(c.division || ''));
+    }
+
+    function isDivisionOneTopThree(c) {
+      if (c.bumps_position == null || c.bumps_position < 1 || c.bumps_position > 3) return false;
+      return /Division\s*1(?!\d)/i.test(String(c.division || ''));
+    }
+
+    function defaultObSteps(c) {
+      if (c.bumps_position === 2) return 2;
+      return 3;
+    }
+
+    function formatReturnSigned(v) {
+      if (v == null || v === '') return '—';
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '—';
+      if (n > 0) return '+' + n;
+      if (n === 0) return '+0';
+      return String(n);
+    }
+
+    function formatPop2(v) {
+      if (v == null || v === '') return '—';
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(2) : '—';
+    }
+
+    function getObStepsFromRow(row) {
+      const obInp = row.querySelector('input.ob-crew');
+      const stepsInp = row.querySelector('input.ob-steps-input');
+      if (!obInp || !obInp.checked || !stepsInp) return 0;
+      const v = parseInt(stepsInp.value, 10);
+      return Number.isFinite(v) ? Math.min(9, Math.max(0, v)) : 0;
+    }
+
+    function refreshPickerMeta(meta, c, side) {
+      const fullList = side === 'men' ? state.men : state.women;
+      const row = meta.closest('.crew-pick');
+      const obSteps = row ? getObStepsFromRow(row) : 0;
+      const eff = effectiveReturnForCrew(fullList, c, obSteps);
+      meta.textContent = '';
+      fillPickerMeta(meta, c, eff);
+    }
+
+    function wireMetaRefresh(row, meta, c, side) {
+      const refresh = () => refreshPickerMeta(meta, c, side);
+      const obInp = row.querySelector('input.ob-crew');
+      const stepsInp = row.querySelector('input.ob-steps-input');
+      if (obInp) obInp.addEventListener('change', refresh);
+      if (stepsInp) {
+        stepsInp.addEventListener('input', refresh);
+        stepsInp.addEventListener('change', refresh);
+      }
+    }
+
+    function fillPickerMeta(meta, c, effectiveReturn) {
+      meta.textContent = '';
+      if (isDivisionOneHead(c) && c.row_over != null && c.row_over !== '') {
+        const ro = document.createElement('span');
+        ro.className = 'crew-ret';
+        ro.textContent = formatReturnSigned(c.row_over);
+        meta.appendChild(ro);
+        if (c.popularity != null) {
+          meta.appendChild(document.createTextNode(' · '));
+          const pm = document.createElement('span');
+          pm.className = 'pop-market';
+          pm.textContent = '📈' + formatPop2(c.popularity);
+          meta.appendChild(pm);
+        }
+        return;
+      }
+      const eff = effectiveReturn != null ? effectiveReturn : c.return;
+      const ret = document.createElement('span');
+      ret.className = 'crew-ret';
+      ret.textContent = formatReturnSigned(eff);
+      meta.appendChild(ret);
+      if (c.popularity != null) {
+        meta.appendChild(document.createTextNode(' · '));
+        const pm = document.createElement('span');
+        pm.className = 'pop-market';
+        pm.textContent = '📈' + formatPop2(c.popularity);
+        meta.appendChild(pm);
+      }
+    }
+
+    function crewsByDivisionSorted(crews) {
+      const by = {};
+      for (const c of crews) {
+        const d = c.division || '';
+        if (!by[d]) by[d] = [];
+        by[d].push(c);
+      }
+      for (const d of Object.keys(by)) {
+        by[d].sort((a, b) => {
+          const ap = a.bumps_position == null ? 9999 : a.bumps_position;
+          const bp = b.bumps_position == null ? 9999 : b.bumps_position;
+          return ap - bp;
+        });
+      }
+      return by;
+    }
+
+    function effectiveReturnForCrew(fullSideList, crew, obSteps) {
+      const base = Number(crew.return);
+      const steps = Math.min(9, Math.max(0, Math.round(Number(obSteps))));
+      if (!Number.isFinite(steps) || steps < 1 || crew.bumps_position == null) return Math.round(base);
+      const p = crew.bumps_position;
+      const div = crew.division || '';
+      const groups = crewsByDivisionSorted(fullSideList);
+      const g = groups[div] || [];
+      let sum = base;
+      for (let delta = 1; delta <= steps; delta++) {
+        const target = g.find((x) => x.bumps_position === p - delta);
+        if (target) sum += Number(target.return);
+      }
+      return Math.round(sum);
+    }
+
+    function groupByDivisionOrdered(crews) {
+      const groups = [];
+      let cur = null;
+      for (const c of crews) {
+        const t = c.division || '';
+        if (!cur || cur.title !== t) {
+          cur = { title: t, crews: [] };
+          groups.push(cur);
+        }
+        cur.crews.push(c);
+      }
+      return groups;
+    }
+
+    function renderSide(containerId, crews) {
+      const box = el(containerId);
+      box.innerHTML = '';
+      if (!crews.length) {
+        box.innerHTML = '<p class="text-muted small">No crews with usable data.</p>';
+        return;
+      }
+      const side = containerId === 'menCrews' ? 'men' : 'women';
+      const groups = groupByDivisionOrdered(crews);
+      for (const g of groups) {
+        const lg = document.createElement('div');
+        lg.className = 'list-group mb-3';
+        const header = document.createElement('div');
+        header.className = 'list-group-item list-group-item-dark market-row';
+        header.innerHTML = `<h5 class="mb-0">${escapeHtml(g.title || 'Division')}</h5>`;
+        lg.appendChild(header);
+
+        for (const c of g.crews) {
+          const row = document.createElement('div');
+          row.className = 'list-group-item market-row crew-pick d-flex align-items-center flex-nowrap';
+          row.dataset.crewIndex = String(c._idx);
+          row.dataset.side = side;
+
+          const obDisabled = isDivisionOneTopThree(c);
+
+          const lab = document.createElement('div');
+          lab.className = 'd-flex align-items-center flex-nowrap flex-grow-1 mb-0 crew-pick-main';
+          lab.addEventListener('click', () => {
+            row.classList.toggle('crew-row--selected');
+            if (!row.classList.contains('crew-row--selected')) {
+              const obInp = row.querySelector('input.ob-crew');
+              const obWrapVisible = row.querySelector('.ob-up-wrap');
+              const stepsInp = row.querySelector('input.ob-steps-input');
+              if (obInp) obInp.checked = false;
+              if (obWrapVisible) obWrapVisible.classList.remove('is-open');
+              if (stepsInp) stepsInp.value = String(stepsInp.dataset.defaultOb || '3');
+              const metaEl = row.querySelector('.crew-meta');
+              const idx = +row.dataset.crewIndex;
+              const s = row.dataset.side;
+              if (metaEl && s && (s === 'men' ? state.men[idx] : state.women[idx])) {
+                const ent = s === 'men' ? state.men[idx] : state.women[idx];
+                refreshPickerMeta(metaEl, ent, s);
+              }
+            }
+          });
+
+          const av = document.createElement('span');
+          const blade = (c.club_css && c.club_css.startsWith('club-')) ? c.club_css : 'club-other';
+          av.className = `avatar ${blade} flex-shrink-0`;
+          if (c.bumps_position != null) av.textContent = String(c.bumps_position);
+
+          const name = document.createElement('span');
+          name.className = 'crew-name flex-grow-1';
+          name.textContent = displayCrewName(c.crew);
+          name.title = c.crew;
+
+          const metaCol = document.createElement('div');
+          metaCol.className = 'crew-meta-col';
+          const meta = document.createElement('span');
+          meta.className = 'crew-meta';
+          fillPickerMeta(meta, c, effectiveReturnForCrew(crews, c, 0));
+          metaCol.appendChild(meta);
+
+          lab.appendChild(av);
+          lab.appendChild(name);
+          lab.appendChild(metaCol);
+
+          const obSlot = document.createElement('div');
+          obSlot.className = 'crew-ob-slot';
+
+          if (!obDisabled) {
+            const obWrap = document.createElement('label');
+            obWrap.className = 'ob-tick mb-0';
+            obWrap.title = 'Overbump: include returns of crews ahead (set how many when enabled).';
+            obWrap.addEventListener('click', (e) => e.stopPropagation());
+            const obInp = document.createElement('input');
+            obInp.type = 'checkbox';
+            obInp.className = 'ob-crew';
+            obInp.dataset.index = String(c._idx);
+            const obLbl = document.createElement('span');
+            obLbl.className = 'ob-lbl';
+            obLbl.textContent = 'OB';
+            obWrap.appendChild(obInp);
+            obWrap.appendChild(obLbl);
+
+            const obUpWrap = document.createElement('div');
+            obUpWrap.className = 'ob-up-wrap mb-0';
+            obUpWrap.addEventListener('click', (e) => e.stopPropagation());
+            const obStepsInput = document.createElement('input');
+            obStepsInput.type = 'number';
+            obStepsInput.className = 'form-control form-control-sm ob-steps-input';
+            obStepsInput.min = '0';
+            obStepsInput.max = '9';
+            const defOb = defaultObSteps(c);
+            obStepsInput.dataset.defaultOb = String(defOb);
+            obStepsInput.value = String(defOb);
+            obStepsInput.title = 'How many crews ahead to include (type a number — no arrows).';
+            obStepsInput.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
+            const obStepsHint = document.createElement('span');
+            obStepsHint.className = 'ob-steps-hint';
+            obStepsHint.textContent = 'up';
+            obUpWrap.appendChild(obStepsInput);
+            obUpWrap.appendChild(obStepsHint);
+
+            obInp.addEventListener('change', () => {
+              if (obInp.checked) {
+                obUpWrap.classList.add('is-open');
+                const v = parseInt(obStepsInput.value, 10);
+                if (!Number.isFinite(v) || v < 1) obStepsInput.value = String(defOb);
+              } else {
+                obUpWrap.classList.remove('is-open');
+                obStepsInput.value = String(defOb);
+              }
+            });
+
+            obSlot.appendChild(obWrap);
+            obSlot.appendChild(obUpWrap);
+            wireMetaRefresh(row, meta, c, side);
+          }
+
+          row.appendChild(lab);
+          row.appendChild(obSlot);
+
+          lg.appendChild(row);
+        }
+        box.appendChild(lg);
+      }
+    }
+
+    el('btnLoad').onclick = async () => {
+      setStatus('Loading…', '');
+      el('results').innerHTML = '';
+      setResultsHintVisible(true);
+      try {
+        const r = await fetch('/api/load', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            series: el('series').value,
+            year: el('year').value,
+            use_latest: el('useLatest').checked,
+          }),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+          setStatus(data.error || 'Load failed', 'err');
+          return;
+        }
+        el('year').value = data.year;
+        data.men.forEach((c, i) => { c._idx = i; });
+        data.women.forEach((c, i) => { c._idx = i; });
+        state.men = data.men;
+        state.women = data.women;
+        renderSide('menCrews', state.men);
+        renderSide('womenCrews', state.women);
+        renderPopularStaticPanels();
+
+        let msg = `Loaded <b>${data.series}${data.year}</b>. `;
+        if (data.men_interpolated) {
+          msg += `Men: ${state.men.length} crews — costs <b>estimated</b> (concluded). `;
+        } else {
+          msg += `Men: ${state.men.length} with site prices. `;
+        }
+        if (data.women_interpolated) {
+          msg += `Women: ${state.women.length} crews — costs <b>estimated</b> (concluded).`;
+        } else {
+          msg += `Women: ${state.women.length} with site prices.`;
+        }
+        setStatus(msg, 'ok');
+      } catch (e) {
+        setStatus(String(e), 'err');
+      }
+    };
+
+    function selectedCrewsWithFlags(side) {
+      const list = side === 'men' ? state.men : state.women;
+      const boxId = side === 'men' ? 'menCrews' : 'womenCrews';
+      const out = [];
+      document.querySelectorAll(`#${boxId} .crew-pick.crew-row--selected`).forEach((row) => {
+        const i = +row.dataset.crewIndex;
+        if (!list[i]) return;
+        const obInp = row.querySelector('input.ob-crew');
+        const stepsInp = row.querySelector('input.ob-steps-input');
+        let obSteps = 0;
+        if (obInp && obInp.checked && stepsInp) {
+          const v = parseInt(stepsInp.value, 10);
+          obSteps = Number.isFinite(v) ? Math.min(9, Math.max(0, v)) : 0;
+        }
+        out.push({ entry: list[i], obSteps });
+      });
+      return out;
+    }
+
+    function rowsForApi(fullSideList, selections) {
+      return selections.map(({ entry, obSteps }) => {
+        const ret = effectiveReturnForCrew(fullSideList, entry, obSteps);
+        return {
+          crew: entry.crew,
+          cost: entry.cost,
+          return: ret,
+          division: entry.division,
+          club_css: entry.club_css,
+          bumps_position: entry.bumps_position,
+          row_over: entry.row_over,
+          popularity: entry.popularity,
+          bumped_down: entry.bumped_down,
+        };
+      });
+    }
+
+    function topTenByPopularityForList(crews) {
+      const rows = crews
+        .filter((c) => c.popularity != null && Number.isFinite(Number(c.popularity)))
+        .map((c) => ({ crew: c.crew, pop: Number(c.popularity) }));
+      rows.sort((a, b) => b.pop - a.pop);
+      return rows.slice(0, 10);
+    }
+
+    function buildPopularTable(top) {
+      const tbl = document.createElement('table');
+      tbl.className = 'table table-sm table-bordered mb-0 results-table bg-white';
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>#</th><th>Crew</th><th>📈</th></tr>';
+      tbl.appendChild(thead);
+      const tb = document.createElement('tbody');
+      top.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        const tdN = document.createElement('td');
+        tdN.textContent = String(i + 1);
+        const tdCrew = document.createElement('td');
+        tdCrew.className = 'crew-cell';
+        tdCrew.textContent = displayCrewName(r.crew);
+        tdCrew.title = r.crew;
+        const tdP = document.createElement('td');
+        const pm = document.createElement('span');
+        pm.className = 'pop-market';
+        pm.textContent = '📈' + formatPop2(r.pop);
+        tdP.appendChild(pm);
+        tr.appendChild(tdN);
+        tr.appendChild(tdCrew);
+        tr.appendChild(tdP);
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      return tbl;
+    }
+
+    function renderPopularStaticPanels() {
+      const menBox = el('popularCrewsMen');
+      const womenBox = el('popularCrewsWomen');
+      if (!menBox || !womenBox) return;
+      menBox.classList.remove('text-muted', 'small');
+      womenBox.classList.remove('text-muted', 'small');
+      menBox.innerHTML = '';
+      womenBox.innerHTML = '';
+      const menTop = topTenByPopularityForList(state.men);
+      const womenTop = topTenByPopularityForList(state.women);
+      if (!menTop.length) {
+        menBox.innerHTML = '<p class="text-muted small mb-0">No men’s popularity data.</p>';
+      } else {
+        menBox.appendChild(buildPopularTable(menTop));
+      }
+      if (!womenTop.length) {
+        womenBox.innerHTML = '<p class="text-muted small mb-0">No women’s popularity data.</p>';
+      } else {
+        womenBox.appendChild(buildPopularTable(womenTop));
+      }
+    }
+
+    el('btnOpt').onclick = async () => {
+      const menSel = selectedCrewsWithFlags('men');
+      const womenSel = selectedCrewsWithFlags('women');
+      el('results').innerHTML = '';
+      setResultsHintVisible(true);
+      if (!menSel.length && !womenSel.length) {
+        setStatus('Select at least one crew for men and/or women.', 'err');
+        return;
+      }
+      setStatus('Optimizing…', '');
+      try {
+        const r = await fetch('/api/optimize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            budget_m: +el('budgetM').value || 0,
+            budget_w: +el('budgetW').value || 0,
+            men: rowsForApi(state.men, menSel),
+            women: rowsForApi(state.women, womenSel),
+          }),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+          setStatus(data.error || 'Optimize failed', 'err');
+          return;
+        }
+        setStatus('HAVE YOU UPDATED YOUR CRAB BALANCES?', 'ok');
+        const box = el('results');
+        box.innerHTML = '';
+        ['men', 'women'].forEach((side) => {
+          const block = data[side];
+          if (!block.combinations || !block.combinations.length) return;
+          const wrap = document.createElement('div');
+          wrap.className = 'mb-4';
+          const h = document.createElement('h2');
+          h.textContent = `${block.label} — top 10`;
+          wrap.appendChild(h);
+          block.combinations.forEach((c) => {
+            const div = document.createElement('div');
+            div.className = 'combo';
+            const h3 = document.createElement('h3');
+            h3.innerHTML = 'Combination ' + c.rank + ' — total <strong>' + escapeHtml(formatReturnSigned(c.total_return)) + '</strong>';
+            div.appendChild(h3);
+            const tbl = document.createElement('table');
+            tbl.className = 'table table-sm table-bordered bg-white mb-0 results-table';
+            tbl.innerHTML = '<thead><tr><th>Crew</th><th>Return</th><th>📈</th></tr></thead>';
+            const tb = document.createElement('tbody');
+            c.detail.forEach((row) => {
+              const tr = document.createElement('tr');
+              const tdCrew = document.createElement('td');
+              tdCrew.className = 'crew-cell';
+              tdCrew.textContent = displayCrewName(row.crew);
+              tdCrew.title = row.crew;
+              const headRowOverOnly = isDivisionOneHead(row) && row.row_over != null && row.row_over !== '';
+              const tdRet = document.createElement('td');
+              if (headRowOverOnly) {
+                const sp = document.createElement('span');
+                sp.className = 'crew-ret';
+                sp.textContent = formatReturnSigned(row.row_over);
+                tdRet.appendChild(sp);
+              } else {
+                const sp = document.createElement('span');
+                sp.className = 'crew-ret';
+                sp.textContent = formatReturnSigned(row.return);
+                tdRet.appendChild(sp);
+              }
+              const tdPop = document.createElement('td');
+              tdPop.style.whiteSpace = 'nowrap';
+              if (headRowOverOnly) {
+                if (row.popularity != null) {
+                  const pm = document.createElement('span');
+                  pm.className = 'pop-market';
+                  pm.textContent = '📈' + formatPop2(row.popularity);
+                  tdPop.appendChild(pm);
+                }
+                if (!tdPop.childNodes.length) tdPop.textContent = '—';
+              } else {
+                if (row.popularity != null) {
+                  const pm = document.createElement('span');
+                  pm.className = 'pop-market';
+                  pm.textContent = '📈' + formatPop2(row.popularity);
+                  tdPop.appendChild(pm);
+                }
+                if (!tdPop.childNodes.length) tdPop.textContent = '—';
+              }
+              tr.appendChild(tdCrew);
+              tr.appendChild(tdRet);
+              tr.appendChild(tdPop);
+              tb.appendChild(tr);
+            });
+            tbl.appendChild(tb);
+            div.appendChild(tbl);
+            wrap.appendChild(div);
+          });
+          box.appendChild(wrap);
+        });
+        setResultsHintVisible(el('results').children.length === 0);
+      } catch (e) {
+        setStatus(String(e), 'err');
+      }
+    };
+  </script>
+</body>
+</html>
