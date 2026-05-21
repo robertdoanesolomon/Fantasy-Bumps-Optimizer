@@ -13,15 +13,58 @@ from bs4 import BeautifulSoup
 
 BASE = "https://fantasybumps.org.uk"
 
+# Observed heuristic: crab buy price tracks ~4× bump-up payout except headship (fixed band top).
+RETURN_CRAB_MULTIPLIER = 4.0
+_DIVISION_ONE_HEADSHIP = re.compile(r"Division\s*1(?!\d)", re.IGNORECASE)
+
 
 def interpolated_costs(n_crews: int) -> np.ndarray:
-    """When the event has concluded: head 300, foot 20, linear by row order."""
+    """Fallback 300→20 log-linear anchors by page order when a concluded-row payout is unusable."""
     if n_crews <= 0:
         return np.array([], dtype=int)
     if n_crews == 1:
         return np.array([300], dtype=int)
-    r = np.arange(n_crews, dtype=float)
-    return np.round(300 - 280 * r / (n_crews - 1)).astype(int)
+    head_f = 300.0
+    foot_f = 20.0
+    # i = 0 first on page ≈ highest price, last row = cheapest
+    t = np.arange(n_crews, dtype=float) / (n_crews - 1.0)
+    vals = head_f * (foot_f / head_f) ** t
+    return np.round(vals).astype(int)
+
+
+def _is_division_one_headship_row(division: str, bumps_position) -> bool:
+    if bumps_position is None or pd.isna(bumps_position):
+        return False
+    try:
+        if int(bumps_position) != 1:
+            return False
+    except (TypeError, ValueError):
+        return False
+    return bool(_DIVISION_ONE_HEADSHIP.search(division or ""))
+
+
+def concluded_costs_from_returns(df: pd.DataFrame) -> pd.Series:
+    """When the site no longer exposes buy buttons: costs ≈ multiplier × payout, headship 300 (Guide)."""
+    n = len(df)
+    anchors = interpolated_costs(n)
+    vals: list[int] = []
+    for i in range(n):
+        row = df.iloc[i]
+        div = str(row.get("division") or "")
+        if _is_division_one_headship_row(div, row.get("bumps_position")):
+            vals.append(300)
+            continue
+        ret_raw = row.get("return")
+        if pd.notna(ret_raw):
+            try:
+                r_int = int(ret_raw)
+                c = int(round(RETURN_CRAB_MULTIPLIER * r_int))
+                vals.append(max(20, c))
+                continue
+            except (TypeError, ValueError, OverflowError):
+                pass
+        vals.append(int(anchors[i]))
+    return pd.Series(vals, dtype="int64")
 
 
 def parse_signed_int(val: str | None, default: int = 0) -> int:
@@ -122,7 +165,7 @@ def parse_market_page(html: str) -> tuple[pd.DataFrame, bool]:
         return df, False
     df["cost"] = df["cost"].astype("Int64")
     if concluded:
-        df["cost"] = interpolated_costs(len(df))
+        df["cost"] = concluded_costs_from_returns(df).astype("Int64")
         return df, True
     return df, False
 
