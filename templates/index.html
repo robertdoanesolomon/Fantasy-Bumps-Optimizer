@@ -665,16 +665,24 @@
         renderSide('womenCrews', state.women);
         renderPopularStaticPanels();
 
+        const estCosts =
+          '(85-step buy ladder by river order — 300→20 🦀, from Costs.rtf)';
         let msg = `Loaded <b>${data.series}${data.year}</b>. `;
         if (data.men_interpolated) {
-          msg += `Men: ${state.men.length} crews — costs <b>estimated</b> (concluded; ≈4× bump payout per crew; headship 300). `;
+          const why = data.men_concluded
+            ? `event concluded ${estCosts}`
+            : `buy prices not in fetched page (often only when logged in on the site) — modeled costs ${estCosts}`;
+          msg += `Men: ${state.men.length} crews — costs <b>estimated</b> (${why}). `;
         } else {
-          msg += `Men: ${state.men.length} with site prices. `;
+          msg += `Men: ${state.men.length} with site prices from HTML. `;
         }
         if (data.women_interpolated) {
-          msg += `Women: ${state.women.length} crews — costs <b>estimated</b> (concluded; ≈4× bump payout; headship 300).`;
+          const why = data.women_concluded
+            ? `event concluded ${estCosts}`
+            : `buy prices not in fetched page — modeled costs ${estCosts}`;
+          msg += `Women: ${state.women.length} crews — costs <b>estimated</b> (${why}).`;
         } else {
-          msg += `Women: ${state.women.length} with site prices.`;
+          msg += `Women: ${state.women.length} with site prices from HTML.`;
         }
         setStatus(msg, 'ok');
       } catch (e) {

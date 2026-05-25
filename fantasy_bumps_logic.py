@@ -13,57 +13,109 @@ from bs4 import BeautifulSoup
 
 BASE = "https://fantasybumps.org.uk"
 
-# Observed heuristic: crab buy price tracks ~4× bump-up payout except headship (fixed band top).
-RETURN_CRAB_MULTIPLIER = 4.0
-_DIVISION_ONE_HEADSHIP = re.compile(r"Division\s*1(?!\d)", re.IGNORECASE)
+# Site-style buy ladder when prices are unavailable in HTML (Costs.rtf — 85 values, river order).
+REFERENCE_CRAB_LADDER = (
+    300,
+    290,
+    281,
+    273,
+    265,
+    257,
+    249,
+    242,
+    235,
+    228,
+    221,
+    214,
+    208,
+    202,
+    196,
+    190,
+    184,
+    178,
+    173,
+    168,
+    163,
+    158,
+    153,
+    148,
+    143,
+    139,
+    135,
+    131,
+    127,
+    123,
+    119,
+    115,
+    111,
+    108,
+    105,
+    102,
+    99,
+    96,
+    93,
+    90,
+    87,
+    84,
+    81,
+    78,
+    76,
+    74,
+    72,
+    70,
+    68,
+    66,
+    64,
+    62,
+    60,
+    58,
+    56,
+    54,
+    52,
+    50,
+    48,
+    46,
+    44,
+    43,
+    42,
+    41,
+    40,
+    39,
+    38,
+    37,
+    36,
+    35,
+    34,
+    33,
+    32,
+    31,
+    30,
+    29,
+    28,
+    27,
+    26,
+    25,
+    24,
+    23,
+    22,
+    21,
+    20,
+)
 
 
-def interpolated_costs(n_crews: int) -> np.ndarray:
-    """Fallback 300→20 log-linear anchors by page order when a concluded-row payout is unusable."""
-    if n_crews <= 0:
-        return np.array([], dtype=int)
-    if n_crews == 1:
-        return np.array([300], dtype=int)
-    head_f = 300.0
-    foot_f = 20.0
-    # i = 0 first on page ≈ highest price, last row = cheapest
-    t = np.arange(n_crews, dtype=float) / (n_crews - 1.0)
-    vals = head_f * (foot_f / head_f) ** t
-    return np.round(vals).astype(int)
-
-
-def _is_division_one_headship_row(division: str, bumps_position) -> bool:
-    if bumps_position is None or pd.isna(bumps_position):
-        return False
-    try:
-        if int(bumps_position) != 1:
-            return False
-    except (TypeError, ValueError):
-        return False
-    return bool(_DIVISION_ONE_HEADSHIP.search(division or ""))
+assert len(REFERENCE_CRAB_LADDER) == 85, "REFERENCE_CRAB_LADDER must stay in sync with Costs.rtf (85 crews)"
 
 
 def concluded_costs_from_returns(df: pd.DataFrame) -> pd.Series:
-    """When the site no longer exposes buy buttons: costs ≈ multiplier × payout, headship 300 (Guide)."""
+    """Assign modeled crab prices by scraped page row order using REFERENCE_CRAB_LADDER (85 steps)."""
+
+    def _floor_price(i: int) -> int:
+        if i < len(REFERENCE_CRAB_LADDER):
+            return int(REFERENCE_CRAB_LADDER[i])
+        return int(REFERENCE_CRAB_LADDER[-1])
+
     n = len(df)
-    anchors = interpolated_costs(n)
-    vals: list[int] = []
-    for i in range(n):
-        row = df.iloc[i]
-        div = str(row.get("division") or "")
-        if _is_division_one_headship_row(div, row.get("bumps_position")):
-            vals.append(300)
-            continue
-        ret_raw = row.get("return")
-        if pd.notna(ret_raw):
-            try:
-                r_int = int(ret_raw)
-                c = int(round(RETURN_CRAB_MULTIPLIER * r_int))
-                vals.append(max(20, c))
-                continue
-            except (TypeError, ValueError, OverflowError):
-                pass
-        vals.append(int(anchors[i]))
+    vals = [_floor_price(i) for i in range(n)]
     return pd.Series(vals, dtype="int64")
 
 
@@ -97,8 +149,12 @@ def _club_class_from_avatar(avatar) -> tuple[str, int | None]:
     return club, pos
 
 
-def parse_market_page(html: str) -> tuple[pd.DataFrame, bool]:
-    """Returns (df, costs_were_interpolated). Walks list-groups like the live site (divisions + blades)."""
+def parse_market_page(html: str) -> tuple[pd.DataFrame, bool, bool]:
+    """Returns (df, prices_were_estimated, event_concluded).
+
+    prices_were_estimated is True when costs were filled by the model (event over, or no buy
+    buttons in HTML — e.g. open market without sign-in where the site omits public prices).
+    """
     soup = BeautifulSoup(html, "html.parser")
     concluded = "this event has concluded" in html.lower()
     rows: list[dict] = []
@@ -132,6 +188,8 @@ def parse_market_page(html: str) -> tuple[pd.DataFrame, bool]:
             except ValueError:
                 popularity = float("nan")
             buy = item.find("button", class_=lambda c: c and "btn-buy" in c)
+            if buy is None:
+                buy = item.find("a", class_=lambda c: c and "btn-buy" in c)
             price: int | None = None
             if buy is not None:
                 for attr in ("data-cost", "data-price"):
@@ -162,15 +220,20 @@ def parse_market_page(html: str) -> tuple[pd.DataFrame, bool]:
 
     df = pd.DataFrame(rows)
     if df.empty:
-        return df, False
+        return df, False, concluded
     df["cost"] = df["cost"].astype("Int64")
+    scraped_any = bool(df["cost"].notna().any())
     if concluded:
         df["cost"] = concluded_costs_from_returns(df).astype("Int64")
-        return df, True
-    return df, False
+        return df, True, True
+    if not scraped_any:
+        # Open (or undeclared) event but buy prices not in markup (common for anonymous fetches).
+        df["cost"] = concluded_costs_from_returns(df).astype("Int64")
+        return df, True, False
+    return df, False, False
 
 
-def fetch_event(series: str, year: int, gender: str) -> tuple[pd.DataFrame, bool]:
+def fetch_event(series: str, year: int, gender: str) -> tuple[pd.DataFrame, bool, bool]:
     url = f"{BASE}/{series}{year}/{gender}/"
     r = requests.get(url, timeout=30)
     r.raise_for_status()

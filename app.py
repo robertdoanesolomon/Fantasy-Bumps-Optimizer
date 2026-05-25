@@ -41,8 +41,8 @@ def api_load():
             return jsonify({"ok": False, "error": "Could not detect latest year."}), 400
         year = y
     try:
-        men_df, mi = fetch_event(series, year, "men")
-        women_df, wi = fetch_event(series, year, "women")
+        men_df, mi, men_concluded = fetch_event(series, year, "men")
+        women_df, wi, women_concluded = fetch_event(series, year, "women")
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 502
 
@@ -55,6 +55,8 @@ def api_load():
             "series": series,
             "men_interpolated": mi,
             "women_interpolated": wi,
+            "men_concluded": men_concluded,
+            "women_concluded": women_concluded,
             "men": df_to_json_rows(men_ui),
             "women": df_to_json_rows(women_ui),
         }
