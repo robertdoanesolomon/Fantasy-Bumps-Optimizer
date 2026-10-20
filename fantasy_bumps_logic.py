@@ -1,10 +1,19 @@
-"""Shared fetch + optimize logic (matches notebook behaviour)."""
+"""Shared fetch + optimize logic for the Fantasy Bumps optimizer.
+
+Game rules (https://fantasybumps.org.uk/guide-rules/), per seat, evaluated each day:
+  * value change = price of the new river position - price of the old one
+  * cash payout  = 7% of the crew's value for rowing over, plus 14% per place gained
+  * headship row over pays 17.5% (the head crew cannot bump)
+So a crew at river rank r gaining k places pays
+  price[r-k] - price[r] + round(price[r] * (0.07 + 0.14 * k)),
+which reproduces the site's published "+1" payout for every crew (k = 1).
+"""
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 from html import unescape
-from itertools import combinations_with_replacement
 
 import numpy as np
 import pandas as pd
@@ -13,7 +22,9 @@ from bs4 import BeautifulSoup
 
 BASE = "https://fantasybumps.org.uk"
 
-# Site-style buy ladder when prices are unavailable in HTML (Costs.rtf — 85 values, river order).
+# Site buy ladder for an 85-crew event (Costs.rtf, river order). Only a last-resort fallback:
+# events with a different number of crews (e.g. Torpids, 73) use a different ladder, so prices
+# come from the JSON API, or are rebuilt from the HTML's bumped-down deltas.
 REFERENCE_CRAB_LADDER = (
     300,
     290,
@@ -107,7 +118,7 @@ assert len(REFERENCE_CRAB_LADDER) == 85, "REFERENCE_CRAB_LADDER must stay in syn
 
 
 def concluded_costs_from_returns(df: pd.DataFrame) -> pd.Series:
-    """Assign modeled crab prices by scraped page row order using REFERENCE_CRAB_LADDER (85 steps)."""
+    """Last-resort prices by row order using REFERENCE_CRAB_LADDER (exact only for 85-crew events)."""
 
     def _floor_price(i: int) -> int:
         if i < len(REFERENCE_CRAB_LADDER):
@@ -221,32 +232,125 @@ def parse_market_page(html: str) -> tuple[pd.DataFrame, bool, bool]:
     df = pd.DataFrame(rows)
     if df.empty:
         return df, False, concluded
+    df["rank"] = np.arange(1, len(df) + 1)
     df["cost"] = df["cost"].astype("Int64")
     scraped_any = bool(df["cost"].notna().any())
-    if concluded:
-        df["cost"] = concluded_costs_from_returns(df).astype("Int64")
-        return df, True, True
-    if not scraped_any:
-        # Open (or undeclared) event but buy prices not in markup (common for anonymous fetches).
-        df["cost"] = concluded_costs_from_returns(df).astype("Int64")
-        return df, True, False
-    return df, False, False
+    if scraped_any and not concluded:
+        return df, False, False
+    # No buy prices in the markup (concluded event, or anonymous fetch). Prices are fixed by river
+    # position, and "bumped down" is exactly price[r+1] - price[r], so rebuild the ladder from the
+    # 300-crab headship price. Fall back to the 85-step reference ladder if that looks wrong.
+    df["cost"] = _prices_from_bumped_down(df).astype("Int64")
+    return df, True, concluded
+
+
+HEADSHIP_PRICE = 300
+FOOTSHIP_PRICE = 20
+
+
+def _prices_from_bumped_down(df: pd.DataFrame) -> pd.Series:
+    deltas = df["bumped_down"].fillna(0).astype(int).to_numpy()
+    prices = [HEADSHIP_PRICE]
+    for d in deltas[:-1]:
+        prices.append(prices[-1] + int(d))
+    ok = (
+        len(prices) > 1
+        and prices[-1] == FOOTSHIP_PRICE
+        and all(a > b for a, b in zip(prices, prices[1:]))
+    )
+    if ok:
+        return pd.Series(prices, dtype="int64")
+    return concluded_costs_from_returns(df)
+
+
+def _division_label(gender: str, division) -> str:
+    g = "Men's" if str(gender).lower().startswith("m") else "Women's"
+    return f"{g} Division {division}"
+
+
+def parse_market_json(data: dict, gender: str) -> tuple[pd.DataFrame, bool, bool]:
+    """Parse the site's JSON market (``/<event>/<gender>/?format=json``).
+
+    Returns (df, prices_were_estimated, event_concluded). The JSON carries real prices even
+    for concluded events, so prices are never estimated here.
+    """
+    day = data.get("day") or {}
+    concluded = str(day.get("name") or "").strip().lower() == "finish"
+    rows: list[dict] = []
+    for e in sorted(data.get("start_order") or [], key=lambda x: int(x.get("rank") or 0)):
+        crew = e.get("crew") or {}
+        payouts = e.get("payouts") or {}
+        code = str(crew.get("club_code") or "").strip()
+        name = f"{crew.get('club_name', '')} {crew.get('gender', '')}{crew.get('rank', '')}".strip()
+        pop = e.get("popularity")
+        rows.append(
+            {
+                "division": _division_label(gender, e.get("division")),
+                "club_css": f"club-{code}" if code else "club-other",
+                "bumps_position": int(e["bungline"]) if e.get("bungline") is not None else None,
+                "crew": name,
+                "return": int(payouts.get("1", 0)),
+                "row_over": int(payouts.get("0", 0)),
+                "bumped_down": int(payouts.get("-1", 0)),
+                "popularity": float(pop) if pop is not None else float("nan"),
+                "cost": int(e["price"]) if e.get("price") is not None else None,
+                "rank": int(e.get("rank") or 0),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df, False, concluded
+    df["cost"] = df["cost"].astype("Int64")
+    return df, False, concluded
 
 
 def fetch_event(series: str, year: int, gender: str) -> tuple[pd.DataFrame, bool, bool]:
     url = f"{BASE}/{series}{year}/{gender}/"
+    try:
+        r = requests.get(
+            url, params={"format": "json"}, headers={"Accept": "application/json"}, timeout=30
+        )
+        r.raise_for_status()
+        df, est, concluded = parse_market_json(r.json(), gender)
+        if not df.empty:
+            return df, est, concluded
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        pass
     r = requests.get(url, timeout=30)
     r.raise_for_status()
     return parse_market_page(r.text)
 
 
-def latest_year_for_series(series: str, min_y: int = 2020, max_y: int = 2100) -> int | None:
+_SERIES_CODE = {"eights": "E", "torpids": "T", "mays": "M", "lents": "L"}
+
+
+def latest_year_for_series(series: str, min_y: int = 2020, max_y: int | None = None) -> int | None:
+    # Preferred: the site's event list.
+    try:
+        r = requests.get(f"{BASE}/events/", params={"format": "json"},
+                         headers={"Accept": "application/json"}, timeout=15)
+        r.raise_for_status()
+        code = _SERIES_CODE.get(series)
+        years = [
+            int(e["year"])
+            for e in (r.json().get("events") or [])
+            if (e.get("tag") or "").startswith(series) or (code and e.get("series") == code)
+        ]
+        if years:
+            return max(years)
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        pass
+    # Fallback: probe from next year downwards (not from 2100 — that is ~150 requests).
+    if max_y is None:
+        max_y = _dt.date.today().year + 1
     for y in range(max_y, min_y - 1, -1):
         u = f"{BASE}/{series}{y}/men/"
         try:
             h = requests.head(u, timeout=10, allow_redirects=True)
             if h.status_code == 200:
                 return y
+            if h.status_code == 404:
+                continue
             g = requests.get(u, timeout=10, allow_redirects=True)
             if g.status_code == 200 and "Fantasy Bumps" in g.text:
                 return y
@@ -262,6 +366,61 @@ def crews_for_ui(df: pd.DataFrame, interpolated: bool) -> pd.DataFrame:
     if interpolated:
         return df.reset_index(drop=True)
     return df.dropna(subset=["cost"]).reset_index(drop=True)
+
+
+SEATS = 9
+
+
+def top_k_seat_combinations(costs, returns, budget: int, top_n: int = 10, seats: int = SEATS):
+    """Best ``top_n`` multisets of exactly ``seats`` crews (repeats allowed) with total cost <= budget.
+
+    Exact dynamic programme over (seats filled, exact crab cost), keeping the top_n returns per
+    cell. Each multiset has a unique decomposition (last crew index used), so cells never hold
+    duplicates and the global top_n is exact. Ties are broken by lower total cost.
+    Replaces the old brute-force enumeration, which grows as C(n+8, 9) and runs out of memory
+    once ~20 crews are ticked.
+
+    Returns (list of index tuples, list of total returns, list of total costs).
+    """
+    costs = np.asarray(costs, dtype=np.int64)
+    returns = np.asarray(returns, dtype=np.int64)
+    n = len(costs)
+    if n == 0 or top_n <= 0 or budget < 0 or (costs < 0).any():
+        return [], [], []
+    cap = int(min(budget, seats * int(costs.max())))
+    K = int(top_n)
+    NEG = np.iinfo(np.int64).min // 4
+    # val[s, c, k]: k-th best return using s seats at exact cost c;
+    # sel[s, c, k, :s]: the crew indices of that multiset.
+    val = np.full((seats + 1, cap + 1, K), NEG, dtype=np.int64)
+    sel = np.full((seats + 1, cap + 1, K, seats), -1, dtype=np.int32)
+    val[0, 0, 0] = 0
+    for i in range(n):
+        ci, ri = int(costs[i]), int(returns[i])
+        if ci > cap:
+            continue
+        for s in range(1, seats + 1):
+            # Add one more seat of crew i to every (s-1)-seat multiset (which may already use i).
+            ext_v = np.full((cap + 1, K), NEG, dtype=np.int64)
+            src_v = val[s - 1, : cap + 1 - ci, :]
+            ext_v[ci:, :] = np.where(src_v > NEG, src_v + ri, NEG)
+            ext_s = np.full((cap + 1, K, seats), -1, dtype=np.int32)
+            ext_s[ci:, :, :] = sel[s - 1, : cap + 1 - ci, :, :]
+            ext_s[ci:, :, s - 1] = i
+            cand_v = np.concatenate([val[s], ext_v], axis=1)
+            cand_s = np.concatenate([sel[s], ext_s], axis=1)
+            order = np.argsort(-cand_v, axis=1, kind="stable")[:, :K]
+            val[s] = np.take_along_axis(cand_v, order, axis=1)
+            sel[s] = np.take_along_axis(cand_s, order[:, :, None], axis=1)
+    final = val[seats]  # (cap+1, K)
+    cs, ks = np.nonzero(final > NEG)
+    flat = sorted(zip(final[cs, ks].tolist(), cs.tolist(), ks.tolist()), key=lambda t: (-t[0], t[1]))
+    picks, totals, total_costs = [], [], []
+    for tot, c, k in flat[:K]:
+        picks.append(tuple(sorted(int(x) for x in sel[seats, c, k])))
+        totals.append(int(tot))
+        total_costs.append(int(c))
+    return picks, totals, total_costs
 
 
 def run_optimization(
@@ -287,22 +446,14 @@ def run_optimization(
         bumps_positions = np.full(n, np.nan)
     if row_overs is None:
         row_overs = np.full(n, np.nan)
-    all_combinations = np.array(list(combinations_with_replacement(range(n), 9)))
-    combination_costs = costs[all_combinations].sum(axis=1)
-    combination_returns = returns[all_combinations].sum(axis=1)
-    valid_mask = combination_costs <= budget
-    valid_combinations = all_combinations[valid_mask]
-    valid_returns = combination_returns[valid_mask]
-    if len(valid_returns) == 0:
+    picks, totals, total_costs = top_k_seat_combinations(costs, returns, budget, top_n=top_n)
+    if not picks:
         return []
-    top_indices = np.argsort(valid_returns)[-top_n:][::-1]
     out = []
-    for rank, top_idx in enumerate(top_indices):
-        comb = valid_combinations[top_idx]
-        tot_r = int(valid_returns[top_idx])
+    for rank, (comb, tot_r, tot_c) in enumerate(zip(picks, totals, total_costs)):
         detail_records = []
         for ix in comb:
-            rec: dict = {"crew": str(crews.iloc[ix]), "return": int(returns[ix])}
+            rec: dict = {"crew": str(crews.iloc[ix]), "cost": int(costs[ix]), "return": int(returns[ix])}
             pop = popularity[ix]
             if pd.isna(pop):
                 rec["popularity"] = None
@@ -327,7 +478,9 @@ def run_optimization(
                 except (TypeError, ValueError):
                     rec["row_over"] = None
             detail_records.append(rec)
-        out.append({"rank": rank + 1, "total_return": tot_r, "detail": detail_records})
+        out.append(
+            {"rank": rank + 1, "total_return": int(tot_r), "total_cost": int(tot_c), "detail": detail_records}
+        )
     return out
 
 
@@ -346,6 +499,7 @@ def df_to_json_rows(df: pd.DataFrame) -> list[dict]:
             "return": int(r["return"]),
             "row_over": int(ro) if pd.notna(ro) else None,
             "bumped_down": int(bd) if pd.notna(bd) else None,
+            "rank": int(r["rank"]) if "rank" in r and pd.notna(r.get("rank")) else None,
         }
         bp = r.get("bumps_position")
         if pd.notna(bp) and bp is not None:

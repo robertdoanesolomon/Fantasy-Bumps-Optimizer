@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Fantasy Bumps — optimizer (web UI)
 
 Flask app that loads crew data from [fantasybumps.org.uk](https://fantasybumps.org.uk/) and runs combination search with budgets and overbump-style rules.

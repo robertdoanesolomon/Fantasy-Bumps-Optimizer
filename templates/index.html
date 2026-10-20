@@ -277,7 +277,7 @@
         </div>
         <div class="col-auto">
           <label class="small mb-0 mr-2">Year</label>
-          <input type="number" id="year" class="form-control form-control-sm d-inline-block" min="2020" max="2100" value="2025" style="width: 5rem;" />
+          <input type="number" id="year" class="form-control form-control-sm d-inline-block" min="2020" max="2100" value="2026" style="width: 5rem;" />
         </div>
         <div class="col-auto">
           <label class="small mb-0"><input type="checkbox" id="useLatest" class="mr-1" />Latest bumps</label>
@@ -375,17 +375,40 @@
       return /Division\s*1(?!\d)/i.test(String(c.division || ''));
     }
 
-    function divisionOneObBlockedRows(c) {
-      if (c.bumps_position == null || c.bumps_position < 1) return false;
-      if (!/Division\s*1(?!\d)/i.test(String(c.division || ''))) return false;
-      const n = el('series').value === 'torpids' ? 2 : 3;
-      return c.bumps_position <= n;
+    // Payout rules (fantasybumps.org.uk/guide-rules): per seat, value change = new price - old
+    // price, plus a cash payout of 7% of the crew's value for rowing over and 14% per place gained.
+    const PAYOUT_ROW_OVER = 0.07;
+    const PAYOUT_PER_PLACE = 0.14;
+    const OVERBUMP_PLACES = 3;
+
+    function riverRank(c) {
+      if (c.rank != null && Number.isFinite(Number(c.rank))) return Number(c.rank);
+      return c._idx != null ? c._idx + 1 : null;
+    }
+
+    function crewAtRank(list, r) {
+      return list.find((x) => riverRank(x) === r) || null;
+    }
+
+    // Most places a crew can gain in one race: up to the head of its division; a division head
+    // (sandwich boat) also races at the foot of the division above, so it can gain up to that
+    // division's size. The head of the river can't gain any.
+    function maxPlacesGainable(list, c) {
+      const p = c.bumps_position;
+      if (p == null) return 1;
+      if (p > 1) return p - 1;
+      const r = riverRank(c);
+      if (r == null || r <= 1) return 0;
+      const above = crewAtRank(list, r - 1);
+      return above && above.bumps_position != null ? Number(above.bumps_position) : 1;
+    }
+
+    function obUnavailable(list, c) {
+      return maxPlacesGainable(list, c) < OVERBUMP_PLACES;
     }
 
     function defaultObSteps(c) {
-      if (el('series').value === 'torpids') return 2;
-      if (c.bumps_position === 2) return 2;
-      return 3;
+      return OVERBUMP_PLACES;
     }
 
     function formatReturnSigned(v) {
@@ -461,37 +484,27 @@
       }
     }
 
-    function crewsByDivisionSorted(crews) {
-      const by = {};
-      for (const c of crews) {
-        const d = c.division || '';
-        if (!by[d]) by[d] = [];
-        by[d].push(c);
-      }
-      for (const d of Object.keys(by)) {
-        by[d].sort((a, b) => {
-          const ap = a.bumps_position == null ? 9999 : a.bumps_position;
-          const bp = b.bumps_position == null ? 9999 : b.bumps_position;
-          return ap - bp;
-        });
-      }
-      return by;
-    }
-
+    // Expected return per seat if the crew does what you predict:
+    //  - head of the river: it can only row over (17.5% headship payout, the site's row-over value);
+    //  - a normal bump: the site's own "+1" payout;
+    //  - gaining k places (k = 3 overbump, 5 double overbump):
+    //      price[rank - k] - price[rank] + round(price * (7% + 14% * k)).
     function effectiveReturnForCrew(fullSideList, crew, obSteps) {
-      const base = Number(crew.return);
-      const steps = Math.min(9, Math.max(0, Math.round(Number(obSteps))));
-      if (!Number.isFinite(steps) || steps < 1 || crew.bumps_position == null) return Math.round(base);
-      const p = crew.bumps_position;
-      const div = crew.division || '';
-      const groups = crewsByDivisionSorted(fullSideList);
-      const g = groups[div] || [];
-      let sum = base;
-      for (let delta = 1; delta <= steps; delta++) {
-        const target = g.find((x) => x.bumps_position === p - delta);
-        if (target) sum += Number(target.return);
+      const base = Math.round(Number(crew.return));
+      const r = riverRank(crew);
+      if (r === 1 || isDivisionOneHead(crew)) {
+        const ro = Number(crew.row_over);
+        return Number.isFinite(ro) ? Math.round(ro) : base;
       }
-      return Math.round(sum);
+      let k = Math.round(Number(obSteps));
+      if (!Number.isFinite(k) || k <= 1) return base;
+      k = Math.min(k, maxPlacesGainable(fullSideList, crew));
+      if (k <= 1 || r == null) return base;
+      const target = crewAtRank(fullSideList, r - k);
+      const price = Number(crew.cost);
+      if (!target || target.cost == null || !Number.isFinite(price)) return base;
+      const cash = Math.round(price * (PAYOUT_ROW_OVER + PAYOUT_PER_PLACE * k));
+      return Math.round(Number(target.cost) - price + cash);
     }
 
     function groupByDivisionOrdered(crews) {
@@ -531,7 +544,7 @@
           row.dataset.crewIndex = String(c._idx);
           row.dataset.side = side;
 
-          const obDisabled = divisionOneObBlockedRows(c);
+          const obDisabled = obUnavailable(crews, c);
 
           const lab = document.createElement('div');
           lab.className = 'd-flex align-items-center flex-nowrap flex-grow-1 mb-0 crew-pick-main';
@@ -581,7 +594,7 @@
           if (!obDisabled) {
             const obWrap = document.createElement('label');
             obWrap.className = 'ob-tick mb-0';
-            obWrap.title = 'Overbump: include returns of crews ahead (set how many when enabled).';
+            obWrap.title = 'Overbump: set how many places this crew gains (3 = overbump, 5 = double overbump).';
             obWrap.addEventListener('click', (e) => e.stopPropagation());
             const obInp = document.createElement('input');
             obInp.type = 'checkbox';
@@ -599,12 +612,12 @@
             const obStepsInput = document.createElement('input');
             obStepsInput.type = 'number';
             obStepsInput.className = 'form-control form-control-sm ob-steps-input';
-            obStepsInput.min = '0';
-            obStepsInput.max = '9';
+            obStepsInput.min = '1';
+            obStepsInput.max = String(Math.min(9, maxPlacesGainable(crews, c)));
             const defOb = defaultObSteps(c);
             obStepsInput.dataset.defaultOb = String(defOb);
             obStepsInput.value = String(defOb);
-            obStepsInput.title = 'How many crews ahead to include (type a number — no arrows).';
+            obStepsInput.title = 'Places gained (3 = overbump, 5 = double overbump). Capped at the head of its division.';
             obStepsInput.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
             const obStepsHint = document.createElement('span');
             obStepsHint.className = 'ob-steps-hint';
@@ -625,11 +638,12 @@
 
             obSlot.appendChild(obWrap);
             obSlot.appendChild(obUpWrap);
-            wireMetaRefresh(row, meta, c, side);
           }
 
           row.appendChild(lab);
           row.appendChild(obSlot);
+          // Must run after obSlot is attached, or querySelector finds no OB inputs to listen to.
+          if (!obDisabled) wireMetaRefresh(row, meta, c, side);
 
           lg.appendChild(row);
         }
@@ -665,24 +679,16 @@
         renderSide('womenCrews', state.women);
         renderPopularStaticPanels();
 
-        const estCosts =
-          '(85-step buy ladder by river order — 300→20 🦀, from Costs.rtf)';
         let msg = `Loaded <b>${data.series}${data.year}</b>. `;
         if (data.men_interpolated) {
-          const why = data.men_concluded
-            ? `event concluded ${estCosts}`
-            : `buy prices not in fetched page (often only when logged in on the site) — modeled costs ${estCosts}`;
-          msg += `Men: ${state.men.length} crews — costs <b>estimated</b> (${why}). `;
+          msg += `Men: ${state.men.length} crews. `;
         } else {
-          msg += `Men: ${state.men.length} with site prices from HTML. `;
+          msg += `Men: ${state.men.length} with site prices. `;
         }
         if (data.women_interpolated) {
-          const why = data.women_concluded
-            ? `event concluded ${estCosts}`
-            : `buy prices not in fetched page — modeled costs ${estCosts}`;
-          msg += `Women: ${state.women.length} crews — costs <b>estimated</b> (${why}).`;
+          msg += `Women: ${state.women.length} crews.`;
         } else {
-          msg += `Women: ${state.women.length} with site prices from HTML.`;
+          msg += `Women: ${state.women.length} with site prices.`;
         }
         setStatus(msg, 'ok');
       } catch (e) {
@@ -722,6 +728,7 @@
           row_over: entry.row_over,
           popularity: entry.popularity,
           bumped_down: entry.bumped_down,
+          rank: entry.rank,
         };
       });
     }
@@ -811,7 +818,15 @@
           setStatus(data.error || 'Optimize failed', 'err');
           return;
         }
-        setStatus('HAVE YOU UPDATED YOUR CRAB BALANCES?', 'ok');
+        const noFit = [];
+        if (menSel.length && !(data.men.combinations || []).length) noFit.push('men');
+        if (womenSel.length && !(data.women.combinations || []).length) noFit.push('women');
+        if (noFit.length) {
+          setStatus('HAVE YOU UPDATED YOUR CRAB BALANCES? No 9-seat combination of the selected crews fits the budget for ' +
+            noFit.join(' and ') + ' — tick some cheaper crews or raise the crabs.', 'err');
+        } else {
+          setStatus('HAVE YOU UPDATED YOUR CRAB BALANCES?', 'ok');
+        }
         const box = el('results');
         box.innerHTML = '';
         ['men', 'women'].forEach((side) => {
@@ -826,7 +841,8 @@
             const div = document.createElement('div');
             div.className = 'combo';
             const h3 = document.createElement('h3');
-            h3.innerHTML = 'Combination ' + c.rank + ' — total <strong>' + escapeHtml(formatReturnSigned(c.total_return)) + '</strong>';
+            h3.innerHTML = 'Combination ' + c.rank + ' — total <strong>' + escapeHtml(formatReturnSigned(c.total_return)) + '</strong>' +
+              (c.total_cost != null ? ' · cost ' + escapeHtml(String(c.total_cost)) + ' 🦀' : '');
             div.appendChild(h3);
             const tbl = document.createElement('table');
             tbl.className = 'table table-sm table-bordered bg-white mb-0 results-table';

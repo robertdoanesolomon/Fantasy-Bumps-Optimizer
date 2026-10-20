@@ -32,9 +32,9 @@ def api_load():
     series = data.get("series") or "eights"
     use_latest = bool(data.get("use_latest"))
     try:
-        year = int(data.get("year") or 2025)
+        year = int(data.get("year") or 2026)
     except (TypeError, ValueError):
-        year = 2025
+        year = 2026
     if use_latest:
         y = latest_year_for_series(series)
         if y is None:
