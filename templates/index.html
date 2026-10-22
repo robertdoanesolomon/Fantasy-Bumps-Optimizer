@@ -339,7 +339,7 @@
   </footer>
 
   <script>
-    const state = { men: [], women: [] };
+    const state = { men: [], women: [], series: 'eights' };
     const el = (id) => document.getElementById(id);
 
     function setResultsHintVisible(show) {
@@ -403,7 +403,16 @@
       return above && above.bumps_position != null ? Number(above.bumps_position) : 1;
     }
 
+    // Eights: bumped and bumping crews both drop out, so with ABCD, C bumps B and D can catch A,
+    // finishing DCBA (D gains 3 = overbump; 5 = double overbump).
+    // Torpids: only the bumping crew pulls over; the bumped crew keeps going and can be bumped
+    // again (ABC -> BCA), so a bumping crew only ever gains 1 place and there is no overbump.
+    function isTorpids() {
+      return state.series === 'torpids';
+    }
+
     function obUnavailable(list, c) {
+      if (isTorpids()) return true;
       return maxPlacesGainable(list, c) < OVERBUMP_PLACES;
     }
 
@@ -497,7 +506,7 @@
         return Number.isFinite(ro) ? Math.round(ro) : base;
       }
       let k = Math.round(Number(obSteps));
-      if (!Number.isFinite(k) || k <= 1) return base;
+      if (isTorpids() || !Number.isFinite(k) || k <= 1) return base;
       k = Math.min(k, maxPlacesGainable(fullSideList, crew));
       if (k <= 1 || r == null) return base;
       const target = crewAtRank(fullSideList, r - k);
@@ -675,6 +684,7 @@
         data.women.forEach((c, i) => { c._idx = i; });
         state.men = data.men;
         state.women = data.women;
+        state.series = data.series;
         renderSide('menCrews', state.men);
         renderSide('womenCrews', state.women);
         renderPopularStaticPanels();
