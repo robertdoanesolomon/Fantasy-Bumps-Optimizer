@@ -379,7 +379,14 @@
     // price, plus a cash payout of 7% of the crew's value for rowing over and 14% per place gained.
     const PAYOUT_ROW_OVER = 0.07;
     const PAYOUT_PER_PLACE = 0.14;
-    const OVERBUMP_PLACES = 3;
+    // Places a crew gains with an overbump:
+    //  Eights: bumped and bumping crews both drop out. ABCD: C bumps B, then D catches A -> DCBA,
+    //          so D gains 3 (a double overbump gains 5).
+    //  Torpids: only the bumping crew pulls over; the bumped crew keeps racing. ABC: C bumps B,
+    //          then B bumps A -> CBA, so C gains 2.
+    function overbumpPlaces() {
+      return state.series === 'torpids' ? 2 : 3;
+    }
 
     function riverRank(c) {
       if (c.rank != null && Number.isFinite(Number(c.rank))) return Number(c.rank);
@@ -403,21 +410,12 @@
       return above && above.bumps_position != null ? Number(above.bumps_position) : 1;
     }
 
-    // Eights: bumped and bumping crews both drop out, so with ABCD, C bumps B and D can catch A,
-    // finishing DCBA (D gains 3 = overbump; 5 = double overbump).
-    // Torpids: only the bumping crew pulls over; the bumped crew keeps going and can be bumped
-    // again (ABC -> BCA), so a bumping crew only ever gains 1 place and there is no overbump.
-    function isTorpids() {
-      return state.series === 'torpids';
-    }
-
     function obUnavailable(list, c) {
-      if (isTorpids()) return true;
-      return maxPlacesGainable(list, c) < OVERBUMP_PLACES;
+      return maxPlacesGainable(list, c) < overbumpPlaces();
     }
 
     function defaultObSteps(c) {
-      return OVERBUMP_PLACES;
+      return overbumpPlaces();
     }
 
     function formatReturnSigned(v) {
@@ -496,7 +494,7 @@
     // Expected return per seat if the crew does what you predict:
     //  - head of the river: it can only row over (17.5% headship payout, the site's row-over value);
     //  - a normal bump: the site's own "+1" payout;
-    //  - gaining k places (k = 3 overbump, 5 double overbump):
+    //  - gaining k places (overbump: k = 3 in Eights, 2 in Torpids):
     //      price[rank - k] - price[rank] + round(price * (7% + 14% * k)).
     function effectiveReturnForCrew(fullSideList, crew, obSteps) {
       const base = Math.round(Number(crew.return));
@@ -506,7 +504,7 @@
         return Number.isFinite(ro) ? Math.round(ro) : base;
       }
       let k = Math.round(Number(obSteps));
-      if (isTorpids() || !Number.isFinite(k) || k <= 1) return base;
+      if (!Number.isFinite(k) || k <= 1) return base;
       k = Math.min(k, maxPlacesGainable(fullSideList, crew));
       if (k <= 1 || r == null) return base;
       const target = crewAtRank(fullSideList, r - k);
@@ -603,7 +601,7 @@
           if (!obDisabled) {
             const obWrap = document.createElement('label');
             obWrap.className = 'ob-tick mb-0';
-            obWrap.title = 'Overbump: set how many places this crew gains (3 = overbump, 5 = double overbump).';
+            obWrap.title = 'Overbump: set how many places this crew gains (Eights: 3, double 5; Torpids: 2).';
             obWrap.addEventListener('click', (e) => e.stopPropagation());
             const obInp = document.createElement('input');
             obInp.type = 'checkbox';
@@ -626,7 +624,7 @@
             const defOb = defaultObSteps(c);
             obStepsInput.dataset.defaultOb = String(defOb);
             obStepsInput.value = String(defOb);
-            obStepsInput.title = 'Places gained (3 = overbump, 5 = double overbump). Capped at the head of its division.';
+            obStepsInput.title = 'Places gained (Eights overbump 3, double 5; Torpids overbump 2). Capped at the head of its division.';
             obStepsInput.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
             const obStepsHint = document.createElement('span');
             obStepsHint.className = 'ob-steps-hint';
